@@ -26,6 +26,7 @@ SOFTWARE.
 
 #include <windowsx.h>
 
+#include "dark.h"
 #include "dialog.h"
 #include "taskbar.h"
 #include "window_map.h"
@@ -258,6 +259,16 @@ INT_PTR Dialog::DialogProcDefault(HWND hwnd, UINT uMsg,
     case WM_CLOSE: {
       return OnClose();
     }
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX: {
+      // For these messages, a dialog procedure returns the brush directly
+      if (INT_PTR brush = dark::HandleCtlColor(uMsg, wParam, lParam))
+        return brush;
+      break;
+    }
     case WM_COMMAND: {
       switch (LOWORD(wParam)) {
         case IDOK:
@@ -287,7 +298,12 @@ INT_PTR Dialog::DialogProcDefault(HWND hwnd, UINT uMsg,
       if (size_last_.cx && size_last_.cy)
         SetPosition(nullptr, 0, 0, size_last_.cx, size_last_.cy, SWP_NOMOVE);
 #endif
-      return OnInitDialog();
+      dark::ApplyToTopLevel(hwnd);
+      const INT_PTR result = OnInitDialog();
+      // After OnInitDialog, all controls exist and any SetTheme calls made
+      // there are overridden with their dark counterparts
+      dark::ApplyToChildren(hwnd);
+      return result;
     }
     case WM_DROPFILES: {
       OnDropFiles(reinterpret_cast<HDROP>(wParam));
@@ -334,6 +350,12 @@ INT_PTR Dialog::DialogProcDefault(HWND hwnd, UINT uMsg,
                                 reinterpret_cast<LPNMHDR>(lParam));
       if (result) {
         ::SetWindowLongPtr(hwnd, DWLP_MSGRESULT, result);
+        return TRUE;
+      }
+      // Dark-draw toolbars/rebars the dialog didn't handle itself
+      LRESULT dark_result = 0;
+      if (dark::HandleNotifyCustomDraw(lParam, &dark_result)) {
+        ::SetWindowLongPtr(hwnd, DWLP_MSGRESULT, dark_result);
         return TRUE;
       }
       break;

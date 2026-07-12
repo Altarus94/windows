@@ -28,6 +28,7 @@ SOFTWARE.
 #include <uxtheme.h>
 #include <windowsx.h>
 
+#include "dark.h"
 #include "taskbar.h"
 #include "window.h"
 #include "window_map.h"
@@ -574,6 +575,8 @@ LRESULT Window::SetText(const std::wstring& text) const {
 }
 
 HRESULT Window::SetTheme(LPCWSTR theme_name) const {
+  if (dark::Enabled() && ::lstrcmpiW(theme_name, L"explorer") == 0)
+    theme_name = L"DarkMode_Explorer";
   return ::SetWindowTheme(window_, theme_name, nullptr);
 }
 
@@ -660,6 +663,17 @@ LRESULT Window::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 LRESULT Window::WindowProcDefault(HWND hwnd, UINT uMsg,
                                   WPARAM wParam, LPARAM lParam) {
   switch (uMsg) {
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX: {
+      // e.g. the search edit box is parented to a subclassed toolbar
+      if (LRESULT brush = static_cast<LRESULT>(
+              dark::HandleCtlColor(uMsg, wParam, lParam)))
+        return brush;
+      break;
+    }
     case WM_COMMAND: {
       if (OnCommand(wParam, lParam))
         return 0;
@@ -720,6 +734,10 @@ LRESULT Window::WindowProcDefault(HWND hwnd, UINT uMsg,
                                  reinterpret_cast<LPNMHDR>(lParam));
       if (lResult)
         return lResult;
+      // Dark-draw toolbars/rebars not handled by the window itself
+      LRESULT dark_result = 0;
+      if (dark::HandleNotifyCustomDraw(lParam, &dark_result))
+        return dark_result;
       break;
     }
     case WM_PAINT: {
