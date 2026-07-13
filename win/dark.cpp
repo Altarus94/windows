@@ -767,6 +767,23 @@ bool HandleNotifyCustomDraw(LPARAM lParam, LRESULT* result) {
     }
     return false;
   }
+  if (::lstrcmpiW(class_name, WC_LISTVIEWW) == 0) {
+    // Safety net for plain list views that don't dark-draw their own rows
+    // (e.g. the settings media list): force dark row background + light text.
+    // Lists with their own NM_CUSTOMDRAW handle it before this fallback runs.
+    auto custom_draw = reinterpret_cast<LPNMLVCUSTOMDRAW>(lParam);
+    switch (custom_draw->nmcd.dwDrawStage) {
+      case CDDS_PREPAINT:
+        *result = CDRF_NOTIFYITEMDRAW;
+        return true;
+      case CDDS_ITEMPREPAINT:
+        custom_draw->clrText = kText;
+        custom_draw->clrTextBk = kWindow;
+        *result = CDRF_NEWFONT;
+        return true;
+    }
+    return false;
+  }
   return false;
 }
 
