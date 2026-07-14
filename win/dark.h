@@ -72,5 +72,10 @@ bool HandleNotifyCustomDraw(LPARAM lParam, LRESULT* result);
 // passing the group id (nmcd.dwItemSpec). Returns CDRF_SKIPDEFAULT on success.
 LRESULT DrawListGroupHeader(HWND list, HDC hdc, int group_id);
 
+// Replacement for EnableWindow() on list views. A disabled list view repaints
+// with light system colors that no theme or color override can fix, so in
+// dark mode the list stays enabled and is dimmed instead.
+void EnableListView(HWND hwnd, bool enable);
+
 }  // namespace dark
 }  // namespace win

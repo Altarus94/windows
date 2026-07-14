@@ -284,23 +284,6 @@ LRESULT CALLBACK ListViewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam,
       RepaintGroupHeaders(hwnd);
       return result;
     }
-    case WM_ENABLE: {
-      // The themed disabled state paints light backgrounds; drop the theme
-      // while disabled and dim the colors ourselves instead
-      if (wParam) {
-        ::SetWindowTheme(hwnd, L"DarkMode_Explorer", nullptr);
-        ListView_SetBkColor(hwnd, kWindow);
-        ListView_SetTextBkColor(hwnd, kWindow);
-        ListView_SetTextColor(hwnd, kText);
-      } else {
-        ::SetWindowTheme(hwnd, L"", L"");
-        ListView_SetBkColor(hwnd, kPanel);
-        ListView_SetTextBkColor(hwnd, kPanel);
-        ListView_SetTextColor(hwnd, kGrayText);
-      }
-      ::InvalidateRect(hwnd, nullptr, TRUE);
-      break;
-    }
     case WM_NCDESTROY:
       ::RemoveWindowSubclass(hwnd, ListViewSubclassProc, kListViewSubclassId);
       break;
@@ -627,6 +610,8 @@ void ApplyToControl(HWND hwnd) {
     ListView_SetBkColor(hwnd, kWindow);
     ListView_SetTextBkColor(hwnd, kWindow);
     ListView_SetTextColor(hwnd, kText);
+    // Grid lines draw in a fixed light color; drop them on dark backgrounds
+    ListView_SetExtendedListViewStyleEx(hwnd, LVS_EX_GRIDLINES, 0);
     if (HWND header = ListView_GetHeader(hwnd)) {
       if (_AllowDarkModeForWindow)
         _AllowDarkModeForWindow(header, true);
@@ -724,7 +709,10 @@ COLORREF SysColor(int index) {
     case COLOR_BTNTEXT:       return kText;
     case COLOR_3DFACE:        return kPanel;  // == COLOR_BTNFACE
     case COLOR_GRAYTEXT:      return kGrayText;
-    case COLOR_HIGHLIGHT:     return kHighlight;
+    // Taiga uses COLOR_HIGHLIGHT as a TEXT accent (new-episode titles,
+    // episode-count warnings); the selection blue is too dark to read on a
+    // dark background, so return a brighter accent instead
+    case COLOR_HIGHLIGHT:     return RGB(0x63, 0xB2, 0xF0);
     case COLOR_HIGHLIGHTTEXT: return kText;
     case COLOR_ACTIVEBORDER:  return kBorder;
     case COLOR_3DLIGHT:       return k3DLight;
@@ -880,6 +868,18 @@ LRESULT DrawListGroupHeader(HWND list, HDC hdc, int group_id) {
 
   ::SelectObject(hdc, old_font);
   return CDRF_SKIPDEFAULT;
+}
+
+void EnableListView(HWND hwnd, bool enable) {
+  if (!enabled) {
+    ::EnableWindow(hwnd, enable);
+    return;
+  }
+  // Keep the list enabled (a disabled one repaints with light system colors
+  // no override can fix) and dim the text instead
+  ::EnableWindow(hwnd, TRUE);
+  ListView_SetTextColor(hwnd, enable ? kText : kGrayText);
+  ::InvalidateRect(hwnd, nullptr, TRUE);
 }
 
 bool HandleNotifyCustomDraw(LPARAM lParam, LRESULT* result) {
