@@ -887,7 +887,55 @@ bool HandleNotifyCustomDraw(LPARAM lParam, LRESULT* result) {
     return false;
 
   auto hdr = reinterpret_cast<LPNMHDR>(lParam);
-  if (hdr->code != NM_CUSTOMDRAW || !hdr->hwndFrom)
+  if (!hdr->hwndFrom)
+    return false;
+
+  // Date-time picker drop-down: the month calendar is created on demand and
+  // ignores custom colors while themed, so untheme + recolor it as it opens
+  if (hdr->code == DTN_DROPDOWN) {
+    if (HWND monthcal = DateTime_GetMonthCal(hdr->hwndFrom)) {
+      ::SetWindowTheme(monthcal, L"", L"");
+      MonthCal_SetColor(monthcal, MCSC_BACKGROUND, kPanel);
+      MonthCal_SetColor(monthcal, MCSC_MONTHBK, kField);
+      MonthCal_SetColor(monthcal, MCSC_TEXT, kText);
+      // Quirk: the day-of-week names are drawn with the TITLE BACKGROUND
+      // color, so it must double as readable text on the dark month interior
+      // (light slate band + dark title text)
+      MonthCal_SetColor(monthcal, MCSC_TITLEBK, RGB(0x8A, 0x96, 0xA3));
+      MonthCal_SetColor(monthcal, MCSC_TITLETEXT, RGB(0x1A, 0x1D, 0x23));
+      MonthCal_SetColor(monthcal, MCSC_TRAILINGTEXT, kGrayText);
+
+      // The classic (unthemed) calendar is taller than the themed one the
+      // popup was sized for; resize the control and its host popup to match
+      RECT rect_min = {0};
+      MonthCal_GetMinReqRect(monthcal, &rect_min);
+      int width = rect_min.right;
+      const int width_today = MonthCal_GetMaxTodayWidth(monthcal);
+      if (width_today > width)
+        width = width_today;
+      // A little breathing room: at the exact minimum size, the "Today"
+      // line sits cramped against the popup border
+      width += 6;
+      const int height = rect_min.bottom + 8;
+      ::SetWindowPos(monthcal, nullptr, 0, 0, width, height,
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+      if (HWND popup = ::GetParent(monthcal)) {
+        RECT rect_window = {0}, rect_client = {0};
+        ::GetWindowRect(popup, &rect_window);
+        ::GetClientRect(popup, &rect_client);
+        const int frame_width =
+            (rect_window.right - rect_window.left) - rect_client.right;
+        const int frame_height =
+            (rect_window.bottom - rect_window.top) - rect_client.bottom;
+        ::SetWindowPos(popup, nullptr, 0, 0, width + frame_width,
+                       height + frame_height,
+                       SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+      }
+    }
+    return false;  // side effect only; let default processing continue
+  }
+
+  if (hdr->code != NM_CUSTOMDRAW)
     return false;
 
   wchar_t class_name[32] = {0};
