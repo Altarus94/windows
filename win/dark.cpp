@@ -43,6 +43,8 @@ constexpr UINT_PTR kTabSubclassId = 0xDA01;
 constexpr UINT_PTR kStatusBarSubclassId = 0xDA02;
 constexpr UINT_PTR kListViewSubclassId = 0xDA03;
 constexpr UINT_PTR kButtonSubclassId = 0xDA04;
+constexpr UINT_PTR kUpDownSubclassId = 0xDA05;
+constexpr UINT_PTR kDateTimeSubclassId = 0xDA06;
 
 bool enabled = false;
 
@@ -282,8 +284,150 @@ LRESULT CALLBACK ListViewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam,
       RepaintGroupHeaders(hwnd);
       return result;
     }
+    case WM_ENABLE: {
+      // The themed disabled state paints light backgrounds; drop the theme
+      // while disabled and dim the colors ourselves instead
+      if (wParam) {
+        ::SetWindowTheme(hwnd, L"DarkMode_Explorer", nullptr);
+        ListView_SetBkColor(hwnd, kWindow);
+        ListView_SetTextBkColor(hwnd, kWindow);
+        ListView_SetTextColor(hwnd, kText);
+      } else {
+        ::SetWindowTheme(hwnd, L"", L"");
+        ListView_SetBkColor(hwnd, kPanel);
+        ListView_SetTextBkColor(hwnd, kPanel);
+        ListView_SetTextColor(hwnd, kGrayText);
+      }
+      ::InvalidateRect(hwnd, nullptr, TRUE);
+      break;
+    }
     case WM_NCDESTROY:
       ::RemoveWindowSubclass(hwnd, ListViewSubclassProc, kListViewSubclassId);
+      break;
+  }
+  return ::DefSubclassProc(hwnd, uMsg, wParam, lParam);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Up-down (spinner) buttons: no dark theme class exists, owner-painted
+
+void PaintUpDownArrow(HDC hdc, const RECT& rect, bool up) {
+  const int cx = (rect.left + rect.right) / 2;
+  const int cy = (rect.top + rect.bottom) / 2;
+  POINT points[3];
+  if (up) {
+    points[0] = {cx - 3, cy + 2};
+    points[1] = {cx + 3, cy + 2};
+    points[2] = {cx, cy - 2};
+  } else {
+    points[0] = {cx - 3, cy - 2};
+    points[1] = {cx + 3, cy - 2};
+    points[2] = {cx, cy + 2};
+  }
+  HGDIOBJ old_brush = ::SelectObject(hdc, GetCachedBrush(kGrayText));
+  HGDIOBJ old_pen = ::SelectObject(hdc, ::GetStockObject(NULL_PEN));
+  ::Polygon(hdc, points, 3);
+  ::SelectObject(hdc, old_pen);
+  ::SelectObject(hdc, old_brush);
+}
+
+LRESULT CALLBACK UpDownSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam,
+                                    LPARAM lParam, UINT_PTR, DWORD_PTR) {
+  switch (uMsg) {
+    case WM_ERASEBKGND:
+      return TRUE;
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC hdc = ::BeginPaint(hwnd, &ps);
+      RECT rect_client = {0};
+      ::GetClientRect(hwnd, &rect_client);
+      // Blends with the edit field it is attached to
+      ::FillRect(hdc, &rect_client, GetCachedBrush(kField));
+      RECT rect_up = rect_client;
+      rect_up.bottom = (rect_client.top + rect_client.bottom) / 2;
+      RECT rect_down = rect_client;
+      rect_down.top = rect_up.bottom;
+      PaintUpDownArrow(hdc, rect_up, true);
+      PaintUpDownArrow(hdc, rect_down, false);
+      ::EndPaint(hwnd, &ps);
+      return 0;
+    }
+    case WM_NCDESTROY:
+      ::RemoveWindowSubclass(hwnd, UpDownSubclassProc, kUpDownSubclassId);
+      break;
+  }
+  return ::DefSubclassProc(hwnd, uMsg, wParam, lParam);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Date-time pickers: no dark theme class exists, owner-painted
+// (the drop-down month calendar remains light for now)
+
+LRESULT CALLBACK DateTimeSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam,
+                                      LPARAM lParam, UINT_PTR, DWORD_PTR) {
+  switch (uMsg) {
+    case WM_ERASEBKGND:
+      return TRUE;
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC hdc = ::BeginPaint(hwnd, &ps);
+      RECT rect_client = {0};
+      ::GetClientRect(hwnd, &rect_client);
+
+      ::FillRect(hdc, &rect_client, GetCachedBrush(kField));
+      ::FrameRect(hdc, &rect_client, GetCachedBrush(k3DLight));
+
+      const bool enabled = ::IsWindowEnabled(hwnd) != FALSE;
+      int text_left = rect_client.left + 4;
+
+      // DTS_SHOWNONE check box
+      SYSTEMTIME time = {0};
+      bool checked = true;
+      if (::GetWindowLongW(hwnd, GWL_STYLE) & DTS_SHOWNONE) {
+        checked = ::SendMessageW(hwnd, DTM_GETSYSTEMTIME, 0,
+                                 reinterpret_cast<LPARAM>(&time)) == GDT_VALID;
+        const int box = 13;
+        RECT rect_box = {0};
+        rect_box.left = text_left;
+        rect_box.top = rect_client.top +
+            ((rect_client.bottom - rect_client.top) - box) / 2;
+        rect_box.right = rect_box.left + box;
+        rect_box.bottom = rect_box.top + box;
+        if (HTHEME theme = ::OpenThemeData(hwnd, L"Button")) {
+          int state = checked ? CBS_CHECKEDNORMAL : CBS_UNCHECKEDNORMAL;
+          if (!enabled)
+            state = checked ? CBS_CHECKEDDISABLED : CBS_UNCHECKEDDISABLED;
+          ::DrawThemeBackground(theme, hdc, BP_CHECKBOX, state, &rect_box,
+                                nullptr);
+          ::CloseThemeData(theme);
+        }
+        text_left = rect_box.right + 4;
+      }
+
+      // Formatted date text
+      wchar_t text[128] = {0};
+      ::GetWindowTextW(hwnd, text, _countof(text));
+      HFONT font = reinterpret_cast<HFONT>(::SendMessageW(hwnd, WM_GETFONT, 0, 0));
+      HGDIOBJ old_font = ::SelectObject(hdc, font);
+      ::SetBkMode(hdc, TRANSPARENT);
+      ::SetTextColor(hdc, (enabled && checked) ? kText : kGrayText);
+      RECT rect_text = rect_client;
+      rect_text.left = text_left;
+      rect_text.right -= 16;
+      ::DrawTextW(hdc, text, -1, &rect_text,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      ::SelectObject(hdc, old_font);
+
+      // Drop-down chevron
+      RECT rect_arrow = rect_client;
+      rect_arrow.left = rect_arrow.right - 16;
+      PaintUpDownArrow(hdc, rect_arrow, false);
+
+      ::EndPaint(hwnd, &ps);
+      return 0;
+    }
+    case WM_NCDESTROY:
+      ::RemoveWindowSubclass(hwnd, DateTimeSubclassProc, kDateTimeSubclassId);
       break;
   }
   return ::DefSubclassProc(hwnd, uMsg, wParam, lParam);
@@ -528,6 +672,10 @@ void ApplyToControl(HWND hwnd) {
     ::SetWindowSubclass(hwnd, StatusBarSubclassProc, kStatusBarSubclassId, 0);
   } else if (::lstrcmpiW(class_name, WC_TABCONTROLW) == 0) {
     ::SetWindowSubclass(hwnd, TabSubclassProc, kTabSubclassId, 0);
+  } else if (::lstrcmpiW(class_name, UPDOWN_CLASSW) == 0) {
+    ::SetWindowSubclass(hwnd, UpDownSubclassProc, kUpDownSubclassId, 0);
+  } else if (::lstrcmpiW(class_name, DATETIMEPICK_CLASSW) == 0) {
+    ::SetWindowSubclass(hwnd, DateTimeSubclassProc, kDateTimeSubclassId, 0);
   } else if (::lstrcmpiW(class_name, REBARCLASSNAMEW) == 0) {
     ::SendMessageW(hwnd, RB_SETBKCOLOR, 0, static_cast<LPARAM>(kPanel));
     ::SendMessageW(hwnd, RB_SETTEXTCOLOR, 0, static_cast<LPARAM>(kText));
